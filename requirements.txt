@@ -1,10 +1,10 @@
-# Core App
+# Core
 streamlit>=1.31.0
 
-# LLM / API
+# LLM
 groq>=0.9.0
 
-# Data handling
+# Data
 pandas>=2.1.0
 numpy>=1.26.0
 
@@ -15,16 +15,15 @@ plotly>=5.18.0
 mysql-connector-python>=8.2.0
 sqlalchemy>=2.0.25
 
-# SQLite support (built-in, but sqlalchemy helps)
-# sqlite3 -> comes with Python (DO NOT add)
+# Semantic search
+sentence-transformers>=2.6.0
+torch>=2.1.0
+scikit-learn>=1.3.0
 
-# File uploads / parsing
+# File handling
 openpyxl>=3.1.2
 xlrd>=2.0.1
 
 # Utilities
 python-dateutil>=2.8.2
 pytz>=2023.3
-
-# Optional but recommended
-python-dotenv>=1.0.0
