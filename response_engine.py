@@ -8,71 +8,211 @@ from typing import Dict, List, Tuple, Optional
 
 
 # ================= RESPONSE GENERATION =================
+# def generate_db_response_with_presentation(
+#     question: str,
+#     query: str,
+#     result: Dict,
+#     context: str
+# ) -> Tuple[str, Optional[pd.DataFrame], Optional[go.Figure]]:
+#     """Generate natural language response with visualization using Groq Llama"""
+#     try:
+#         client = Groq(api_key=st.secrets["groq"]["api_key"])
+       
+#         df = result.get("data")
+#         if df is None or df.empty:
+#             return "No results found for your query.", None, None
+       
+#         # Dynamic sample data: Use fewer rows for large datasets
+#         sample_rows = min(5, len(df))  # Show max 5 rows in summary
+#         data_summary = f"Query returned {len(df)} rows with columns: {', '.join(df.columns.tolist())}\n\n"
+#         data_summary += f"Sample data (first {sample_rows} rows):\n{df.head(sample_rows).to_string()}"
+       
+#         response = client.chat.completions.create(
+#             model="llama-3.3-70b-versatile",
+#             messages=[{
+#                 "role": "user",
+#                 "content": f"""Context: {context}
+# Question: {question}
+# SQL Query Executed: {query}
+# Results: {data_summary}
+# Provide a natural, conversational response summarizing these results. Be concise but informative. Highlight key findings."""
+#             }],
+#             max_tokens=800,
+#             temperature=0.7
+#         )
+
+#         prompt_text = f"""
+#         Provide a user-friendly response using this format:
+
+#         - Start with a short direct answer (1–2 lines)
+#         - Then show key insights as bullet points
+#         - Avoid mentioning SQL or tables
+#         - Do NOT dump raw numbers unless meaningful
+#         - Assume the user is non-technical
+
+#         Context: {context}
+#         Question: {question}
+#         SQL Query Executed: {query}
+#         Results: {data_summary}
+#         """
+
+#         usage = response.usage if hasattr(response, "usage") else None
+       
+#         summary = response.choices[0].message.content
+       
+#         # Generate visualization if appropriate
+#         visualization = create_visualization_if_applicable(df, question)
+       
+#         return summary, df, visualization, {
+#         "prompt": prompt_text,
+#         "input_tokens": usage.prompt_tokens if usage else None,
+#         "output_tokens": usage.completion_tokens if usage else None,
+#         "total_tokens": usage.total_tokens if usage else None
+#     }
+       
+#     except Exception as e:
+#         st.error(f"Response generation error: {e}")
+#         return f"Found {len(df)} results.", df, None
+
+
 def generate_db_response_with_presentation(
     question: str,
     query: str,
     result: Dict,
-    context: str
-) -> Tuple[str, Optional[pd.DataFrame], Optional[go.Figure]]:
-    """Generate natural language response with visualization using Groq Llama"""
-    try:
-        client = Groq(api_key=st.secrets["groq"]["api_key"])
-       
-        df = result.get("data")
-        if df is None or df.empty:
-            return "No results found for your query.", None, None
-       
-        # Dynamic sample data: Use fewer rows for large datasets
-        sample_rows = min(5, len(df))  # Show max 5 rows in summary
-        data_summary = f"Query returned {len(df)} rows with columns: {', '.join(df.columns.tolist())}\n\n"
-        data_summary += f"Sample data (first {sample_rows} rows):\n{df.head(sample_rows).to_string()}"
-       
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{
-                "role": "user",
-                "content": f"""Context: {context}
-Question: {question}
-SQL Query Executed: {query}
-Results: {data_summary}
-Provide a natural, conversational response summarizing these results. Be concise but informative. Highlight key findings."""
-            }],
-            max_tokens=800,
-            temperature=0.7
+    context: str,
+    user_prompt_override: Optional[str] = None,
+    sql_tokens: Optional[Dict] = None
+) -> Tuple[str, Optional[pd.DataFrame], Optional[go.Figure], Dict]:
+    """
+    Generate a natural-language response + optional visualization for DB results.
+    Returns:
+        - summary_text (str)
+        - dataframe (pd.DataFrame | None)
+        - visualization (plotly Figure | None)
+        - debug_info (dict)
+    """
+
+    client = Groq(api_key=st.secrets["groq"]["api_key"])
+
+    df: Optional[pd.DataFrame] = result.get("data")
+
+    if df is None or df.empty:
+        return (
+            "I couldn’t find any data that matches your question.",
+            None,
+            None,
+            {
+                "prompt": None,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0
+            }
         )
 
-        prompt_text = f"""
-        Provide a user-friendly response using this format:
+    # -------- 1. Prepare compact data description (LLM-friendly) --------
+    row_count = len(df)
+    column_info = ", ".join(df.columns.tolist())
 
-        - Start with a short direct answer (1–2 lines)
-        - Then show key insights as bullet points
-        - Avoid mentioning SQL or tables
-        - Do NOT dump raw numbers unless meaningful
-        - Assume the user is non-technical
+    # Small statistical hints instead of raw rows
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    stats_summary = ""
 
-        Context: {context}
-        Question: {question}
-        SQL Query Executed: {query}
-        Results: {data_summary}
-        """
+    if numeric_cols:
+        stats = df[numeric_cols].describe().round(2)
+        stats_summary = stats.to_string()
 
-        usage = response.usage if hasattr(response, "usage") else None
-       
-        summary = response.choices[0].message.content
-       
-        # Generate visualization if appropriate
+    data_description = f"""
+    Rows returned: {row_count}
+    Columns: {column_info}
+
+    Key statistics (if applicable):
+    {stats_summary if stats_summary else "No numeric columns"}
+    """
+
+    # -------- 2. Build dynamic prompt --------
+    base_prompt = f"""
+    You are a helpful data assistant.
+
+    Answer the user's question using the query result.
+    Do NOT mention SQL, databases, or tables.
+
+    Response style:
+    - Start with a clear, direct answer (1–2 lines)
+    - Then provide key insights as bullet points
+    - Be non-technical and user-friendly
+    - Avoid dumping raw numbers unless meaningful
+
+    Context:
+    {context}
+
+    User Question:
+    {question}
+
+    Data Summary:
+    {data_description}
+    """
+
+    final_prompt = user_prompt_override.strip() if user_prompt_override else base_prompt
+
+    # -------- 3. LLM call --------
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": final_prompt}],
+        temperature=0.6,
+        max_tokens=700
+    )
+
+    summary_text = response.choices[0].message.content.strip()
+
+    usage = response.usage
+
+    # -------- 4. Visualization (safe + optional) --------
+    visualization = None
+    try:
         visualization = create_visualization_if_applicable(df, question)
-       
-        return summary, df, visualization, {
-        "prompt": prompt_text,
+    except Exception as viz_err:
+        st.warning(f"Visualization skipped: {viz_err}")
+
+    # -------- 5. Debug metadata --------
+
+    answer_tokens = {
+        "input_tokens": usage.prompt_tokens if usage else 0,
+        "output_tokens": usage.completion_tokens if usage else 0,
+        "total_tokens": usage.total_tokens if usage else 0
+    }
+
+    combined_tokens = {
+        "sql_generation": sql_tokens or {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+        },
+        "answer_generation": answer_tokens,
+        "grand_total_tokens": (
+            (sql_tokens["total_tokens"] if sql_tokens else 0)
+            + answer_tokens["total_tokens"]
+        )
+    }
+
+
+    debug_info = {
+        "prompt": final_prompt,
         "input_tokens": usage.prompt_tokens if usage else None,
         "output_tokens": usage.completion_tokens if usage else None,
-        "total_tokens": usage.total_tokens if usage else None
+        "total_tokens": usage.total_tokens if usage else None,
+        "rows_returned": row_count,
+        "columns_used": df.columns.tolist()
     }
-       
-    except Exception as e:
-        st.error(f"Response generation error: {e}")
-        return f"Found {len(df)} results.", df, None
+
+    return summary_text, df, visualization, {
+    "tokens": combined_tokens,
+    "prompts": {
+        "sql_prompt": None,  # optional if you want later
+        "answer_prompt": final_prompt
+    }
+}
+
+
 
 def create_visualization_if_applicable(df: pd.DataFrame, question: str) -> Optional[go.Figure]:
     """Create appropriate visualization based on data and question - Enhanced for robustness"""

@@ -6,6 +6,7 @@ from mysql.connector import Error
 import mysql.connector
 import base64
 import tempfile
+from datetime import datetime
 
 # from db_connection import get_auth_db_connection
 
@@ -115,29 +116,35 @@ def get_auth_db_connection():
 
 
 # ================= CHAT MANAGEMENT FUNCTIONS =================
-def create_new_chat(user_id: int, title: Optional[str], first_question: Optional[str]) -> Optional[int]:
-    """Create new chat session"""
+def create_new_chat(user_id: int, first_question: Optional[str]) -> Optional[int]:
+    """Create new chat session with auto-generated title"""
     connection = get_auth_db_connection()
     if not connection:
         st.error("Failed to connect to database for chat creation")
         return None
-   
+
     try:
         cursor = connection.cursor()
-        chat_title = title or (first_question[:50] + "..." if first_question else "New Chat")
+
+        # ✅ Generate title here (single source of truth)
+        chat_title = generate_smart_chat_title(first_question) if first_question else "New Chat"
+
         cursor.execute(
             "INSERT INTO chats (user_id, title) VALUES (%s, %s)",
             (user_id, chat_title)
         )
         connection.commit()
         return cursor.lastrowid
+
     except Error as e:
         st.error(f"Chat creation error: {e}")
         return None
+
     finally:
         if connection and connection.is_connected():
             cursor.close()
             connection.close()
+
 
 def get_user_chats(user_id: int) -> List[Dict]:
     """Get all chats for user"""
@@ -288,9 +295,13 @@ def delete_chat(chat_id: int, user_id: int) -> Tuple[bool, str]:
             cursor.close()
             connection.close()
 
-def generate_smart_chat_title(question: str) -> str:
-    """Generate smart chat title from first question"""
-    words = question.split()
-    if len(words) <= 5:
+def generate_smart_chat_title(question: str, max_len: int = 50) -> str:
+    if not question:
+        return datetime.now().strftime("%d %b %I:%M %p")
+
+    question = question.strip()
+
+    if len(question) <= max_len:
         return question
-    return question[:50] + "..." if len(question) > 50 else question
+
+    return question[:max_len].rsplit(" ", 1)[0] + "..."

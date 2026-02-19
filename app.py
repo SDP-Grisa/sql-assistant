@@ -923,6 +923,7 @@ MULTI-TABLE DECISION RULES (VERY IMPORTANT)
   b) The question explicitly combines different domains (e.g. products + sales)
 - NEVER use unnecessary JOINs
 - NEVER hallucinate tables or columns
+- Analyse schema and sample data clearly for correct query generation
 
 ========================
 CONTEXT & CONVERSATION INTELLIGENCE
@@ -1061,6 +1062,8 @@ Reasoning: {intent_analysis['reasoning']}
                 "error": "Generated query is not a SELECT statement",
                 "query": query
             }
+        
+        usage = response.usage
        
         return {
             "success": True,
@@ -1071,6 +1074,11 @@ Reasoning: {intent_analysis['reasoning']}
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "user_prompt_override": user_prompt_override
+            },
+            "tokens": {
+            "input_tokens": usage.prompt_tokens if usage else 0,
+            "output_tokens": usage.completion_tokens if usage else 0,
+            "total_tokens": usage.total_tokens if usage else 0
             }
         }
        
@@ -1267,27 +1275,31 @@ def render_assistant_response(
             unsafe_allow_html=True
         )
 
-        if llm_meta and llm_meta.get("total_tokens"):
+        if llm_meta and llm_meta.get("tokens"):
+            # st.caption(
+            #     f"🧠 Tokens — "
+            #     f"In: {llm_meta.get('input_tokens')} | "
+            #     f"Out: {llm_meta.get('output_tokens')} | "
+            #     f"Total: {llm_meta.get('total_tokens')}"
+            # )
             st.caption(
                 f"🧠 Tokens — "
-                f"In: {llm_meta.get('input_tokens')} | "
-                f"Out: {llm_meta.get('output_tokens')} | "
-                f"Total: {llm_meta.get('total_tokens')}"
+                f"In: {llm_meta.get('tokens')} "
             )
 
         st.divider()
 
         # ------------------ Supporting Data ------------------
-        st.markdown("## 📊 Supporting Data")
+        # st.markdown("## 📊 Supporting Data")
 
         if df is not None and not df.empty:
             row_count = len(df)
             col_count = len(df.columns)
 
             # 🔹 High level overview
-            st.markdown(
-                f"**This answer is derived from `{row_count}` records across `{col_count}` fields.**"
-            )
+            # st.markdown(
+            #     f"**This answer is derived from `{row_count}` records across `{col_count}` fields.**"
+            # )
 
             # 🔹 Sample records (IMPROVED CARDS)
             st.markdown("### 🗂 Sample Records")
@@ -1423,6 +1435,7 @@ def render_assistant_response(
     # 🧪 DEBUG TAB
     # ======================================================
     with tabs[3]:
+        
         if context_stats:
             st.markdown("### 📊 Context Stats")
             st.json(context_stats)
@@ -1435,6 +1448,18 @@ def render_assistant_response(
                 llm_meta["prompt"],
                 height=300,
                 key=f"prompt_{message_key}"
+            )
+        
+        if llm_meta and llm_meta.get("tokens"):
+            # st.caption(
+            #     f"🧠 Tokens — "
+            #     f"In: {llm_meta.get('input_tokens')} | "
+            #     f"Out: {llm_meta.get('output_tokens')} | "
+            #     f"Total: {llm_meta.get('total_tokens')}"
+            # )
+            st.caption(
+                f"🧠 Tokens — "
+                f"In: {llm_meta.get('tokens')} "
             )
 
         if not context_stats and not llm_meta:
@@ -1913,7 +1938,7 @@ with st.sidebar:
     st.markdown("### 💬 Chat History")
     
     if st.button("➕ New Chat", use_container_width=True, type="primary", key="new_chat_btn"):
-        new_chat_id = create_new_chat(st.session_state.user_id, None, None)
+        new_chat_id = create_new_chat(st.session_state.user_id, None)
         if new_chat_id:
             st.session_state.current_chat_id = new_chat_id
             st.rerun()
@@ -2049,7 +2074,10 @@ if st.session_state.show_rename_dialog and st.session_state.rename_chat_id:
                     st.rerun()
     
     rename_dialog()
+
+
 # ================= MAIN CHAT INTERFACE =================
+
 # ──────────────────────────────────────────────
 #  HEADER / TITLE
 # ──────────────────────────────────────────────
@@ -2143,12 +2171,15 @@ user_question = st.chat_input(
 if user_question:
     # 1. If no chat exists → create one now
     if not st.session_state.get("current_chat_id"):
-        new_chat_id = create_new_chat(st.session_state.user_id)  # IMPLEMENT THIS FUNCTION
+        new_chat_id = create_new_chat(
+        user_id=st.session_state.user_id,
+        first_question=user_question
+    )
         st.session_state.current_chat_id = new_chat_id
 
         # Generate & set smart title
-        new_title = generate_smart_chat_title(user_question)
-        rename_chat(new_chat_id, st.session_state.user_id, new_title)
+        # new_title = generate_smart_chat_title(user_question)
+        # rename_chat(new_chat_id, st.session_state.user_id, new_title)
 
         # Force rerun to show chat interface instead of welcome screen
         st.rerun()
@@ -2286,12 +2317,15 @@ if user_question:
                             None
                         )
                     else:
+                        sql_tokens = query_result["tokens"]
+
                         # Generate final response + viz
                         summary, df, visualization, llm_meta = generate_db_response_with_presentation(
                             user_question,
                             query,
                             exec_result,
-                            context 
+                            context ,
+                            sql_tokens=sql_tokens
                         )
 
                         render_assistant_response(
